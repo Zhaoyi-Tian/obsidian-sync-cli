@@ -93,14 +93,68 @@ class ObsidianSyncCLI {
     const folders = this.getLocalFolders();
     const isEmptyVault = notes.length === 0 && files.length === 0;
 
+    // Determine if this is incremental sync (has previous sync time)
+    const isIncrementalSync = !isEmptyVault && lastNoteSyncTime > 0;
+
+    // Build local paths sets for del/missing detection
+    const localNotePaths = new Set(notes.map(n => n.path));
+    const localFilePaths = new Set(files.map(f => f.path));
+    const localFolderPaths = new Set(folders.map(f => f.path));
+
+    // Get tracked paths from hash cache
+    const trackedPaths = this.client.getAllPaths();
+    const trackedNotePaths = trackedPaths.filter(p => p.endsWith('.md'));
+    const trackedFilePaths = trackedPaths.filter(p => !p.endsWith('.md'));
+
+    // Detect deleted notes (tracked but not in local)
+    const delNotes: { path: string; pathHash: string }[] = [];
+    for (const path of trackedNotePaths) {
+      if (!localNotePaths.has(path)) {
+        delNotes.push({ path, pathHash: hashContent(path) });
+      }
+    }
+
+    // Detect missing notes (tracked but not in local, only for incremental sync)
+    const missingNotes: { path: string; pathHash: string }[] = [];
+    if (isIncrementalSync) {
+      for (const path of trackedNotePaths) {
+        if (!localNotePaths.has(path)) {
+          missingNotes.push({ path, pathHash: hashContent(path) });
+        }
+      }
+    }
+
+    // Detect deleted files
+    const delFiles: { path: string; pathHash: string }[] = [];
+    for (const path of trackedFilePaths) {
+      if (!localFilePaths.has(path)) {
+        delFiles.push({ path, pathHash: hashContent(path) });
+      }
+    }
+
+    // Detect missing files (only for incremental sync)
+    const missingFiles: { path: string; pathHash: string }[] = [];
+    if (isIncrementalSync) {
+      for (const path of trackedFilePaths) {
+        if (!localFilePaths.has(path)) {
+          missingFiles.push({ path, pathHash: hashContent(path) });
+        }
+      }
+    }
+
     // Debug info
     log('[DEBUG] lastNoteSyncTime:', lastNoteSyncTime);
     log('[DEBUG] lastFileSyncTime:', lastFileSyncTime);
     log('[DEBUG] lastFolderSyncTime:', lastFolderSyncTime);
     log('[DEBUG] isEmptyVault:', isEmptyVault);
+    log('[DEBUG] isIncrementalSync:', isIncrementalSync);
     log('[DEBUG] localNotes count:', notes.length);
     log('[DEBUG] localFiles count:', files.length);
     log('[DEBUG] localFolders count:', folders.length);
+    log('[DEBUG] delNotes count:', delNotes.length);
+    log('[DEBUG] missingNotes count:', missingNotes.length);
+    log('[DEBUG] delFiles count:', delFiles.length);
+    log('[DEBUG] missingFiles count:', missingFiles.length);
 
     const forceLastTime = isEmptyVault ? 0 : lastNoteSyncTime;
     const forceFileLastTime = isEmptyVault ? 0 : lastFileSyncTime;
@@ -116,35 +170,48 @@ class ObsidianSyncCLI {
       lastTime: forceLastTime,
       notes: notes,
     };
-    // Only add delNotes if we have any (plugin only sends when offlineDeleteSyncEnabled)
-    // Only add missingNotes if we have any
+    // Add delNotes if any (like plugin's offlineDeleteSyncEnabled)
+    if (delNotes.length > 0) {
+      noteSyncData.delNotes = delNotes;
+    }
+    // Add missingNotes if any (like plugin does for incremental sync)
+    if (missingNotes.length > 0) {
+      noteSyncData.missingNotes = missingNotes;
+    }
     this.client.Send('NoteSync', noteSyncData);
 
-    // Sync files - with conditional delFiles and missingFiles
+    // Sync files - with delFiles and missingFiles
     const fileSyncData: any = {
       vault: this.config.vault_name,
       lastTime: forceFileLastTime,
       files: files,
     };
-    // Only add delFiles/missingFiles if non-empty (matching plugin behavior)
-    if (fileSyncData.delFiles && fileSyncData.delFiles.length > 0) {
-      // Already set
-    } else {
-      delete (fileSyncData as any).delFiles;
+    if (delFiles.length > 0) {
+      fileSyncData.delFiles = delFiles;
     }
-    if (fileSyncData.missingFiles && fileSyncData.missingFiles.length > 0) {
-      // Already set
-    } else {
-      delete (fileSyncData as any).missingFiles;
+    if (missingFiles.length > 0) {
+      fileSyncData.missingFiles = missingFiles;
     }
     this.client.Send('FileSync', fileSyncData);
 
     // Sync folders - matching plugin format
+    // Detect deleted folders (tracked but not in local)
+    const delFolders: { path: string; pathHash: string }[] = [];
+    // For now, folder tracking is simpler - just use local folders
+    // Missing folders detection for incremental sync
+    const missingFolders: { path: string; pathHash: string }[] = [];
+
     const folderSyncData: any = {
       vault: this.config.vault_name,
       lastTime: forceFolderLastTime,
       folders: folders,
     };
+    if (delFolders.length > 0) {
+      folderSyncData.delFolders = delFolders;
+    }
+    if (missingFolders.length > 0) {
+      folderSyncData.missingFolders = missingFolders;
+    }
     this.client.Send('FolderSync', folderSyncData);
   }
 

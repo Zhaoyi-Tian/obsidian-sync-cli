@@ -1,0 +1,7 @@
+{
+  "vault": "库名",
+  "vault_dir": "/path/to/vault",
+  "api": "http://server:9000",
+  "apiToken": "your-token",
+  "enable_local_push": true
+}

@@ -161,6 +161,13 @@ export class SyncClient {
   }
 
   /**
+   * Get all tracked file paths
+   */
+  getAllPaths(): string[] {
+    return Array.from(this.fileHashes.keys());
+  }
+
+  /**
    * Connect to WebSocket server
    */
   connect(): void {
