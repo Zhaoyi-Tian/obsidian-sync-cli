@@ -7,14 +7,76 @@ import { TFolder } from './types';
 
 /**
  * Folder operator - handles folder sync operations
+ * Adapted from plugin's folder_operator.ts
  */
 export class FolderOperator {
   private vault: Vault;
   private client: SyncClient;
+  private enableLocalPush: boolean;
 
-  constructor(vault: Vault, client: SyncClient) {
+  constructor(vault: Vault, client: SyncClient, enableLocalPush: boolean = true) {
     this.vault = vault;
     this.client = client;
+    this.enableLocalPush = enableLocalPush;
+  }
+
+  /**
+   * Send folder create/modify to server (like plugin's folderModify)
+   */
+  folderCreate(folderPath: string): void {
+    if (!this.enableLocalPush) {
+      log('[SafeMode] Skipping folder create for', folderPath);
+      return;
+    }
+
+    const data = {
+      vault: this.vault.getName(),
+      path: folderPath,
+      pathHash: hashContent(folderPath),
+    };
+
+    this.client.Send('FolderModify', data);
+    log('[SEND] Folder modify:', folderPath);
+  }
+
+  /**
+   * Send folder delete to server (like plugin's folderDelete)
+   */
+  folderDelete(folderPath: string): void {
+    if (!this.enableLocalPush) {
+      log('[SafeMode] Skipping folder delete for', folderPath);
+      return;
+    }
+
+    const data = {
+      vault: this.vault.getName(),
+      path: folderPath,
+      pathHash: hashContent(folderPath),
+    };
+
+    this.client.Send('FolderDelete', data);
+    log('[SEND] Folder delete:', folderPath);
+  }
+
+  /**
+   * Send folder rename to server (like plugin's folderRename)
+   */
+  folderRename(oldPath: string, newPath: string): void {
+    if (!this.enableLocalPush) {
+      log('[SafeMode] Skipping folder rename for', oldPath);
+      return;
+    }
+
+    const data = {
+      vault: this.vault.getName(),
+      path: newPath,
+      pathHash: hashContent(newPath),
+      oldPath: oldPath,
+      oldPathHash: hashContent(oldPath),
+    };
+
+    this.client.Send('FolderRename', data);
+    log('[SEND] Folder rename:', oldPath, '->', newPath);
   }
 
   /**

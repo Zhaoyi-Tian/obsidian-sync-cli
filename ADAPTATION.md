@@ -35,6 +35,9 @@
 | 设置同步 (SettingSync) | 未实现 |
 | 分片进度预估 | 未实现 |
 | Obsidian 内部集成 | 移除 |
+| 只读模式 (readonlySyncEnabled) | 简化为 enableLocalPush |
+| 同步日志管理器 | 未实现 |
+| 文件夹快照管理器 | 未实现 |
 
 ### 4. 保留的核心逻辑
 
@@ -47,21 +50,7 @@
 ---
 
 ## 文件对应关系及具体改动
-## 文件对应关系
 
-```
-原插件                          CLI
-─────────────────────────────────────────────────
-src/lib/file_operator.ts   →   obsidian-sync-cli/src/file_operator.ts
-src/lib/note_operator.ts   →   obsidian-sync-cli/src/note_operator.ts
-src/lib/folder_operator.ts →   obsidian-sync-cli/src/folder_operator.ts
-src/lib/websocket.ts       →   obsidian-sync-cli/src/websocket.ts
-src/lib/helps.ts          →   obsidian-sync-cli/src/helps.ts
-src/lib/types.ts          →   obsidian-sync-cli/src/types.ts
-(无)                       →   obsidian-sync-cli/src/vault.ts      # 模拟 Vault API
-(无)                       →   obsidian-sync-cli/src/config.ts    # 配置加载
-(无)                       →   obsidian-sync-cli/src/fs_watcher.ts # 文件监视
-```
 ### 1. file_operator.ts
 
 | 原插件 | CLI |
@@ -105,6 +94,7 @@ src/lib/types.ts          →   obsidian-sync-cli/src/types.ts
 - `plugin.app.vault` → `this.vault`
 - 移除 `TFolder`, `normalizePath` 等 Obsidian 依赖
 - 保留：文件夹创建、删除、重命名处理
+- 添加：`enableLocalPush` 参数控制是否允许本地上传
 
 ---
 
@@ -120,6 +110,9 @@ src/lib/types.ts          →   obsidian-sync-cli/src/types.ts
 - 移除 `Notice`, `moment`, `Platform` 等 Obsidian 依赖
 - 添加：Node.js 进程退出处理 (`process.exit()`)
 - 保留：认证、消息收发、重连、心跳
+- **添加：元数据持久化** - 存储在 `vault_dir/.obsidian/sync-metadata.json`
+- **添加：文件哈希持久化** - 存储在 `vault_dir/.obsidian/file-hashes.json`
+- **添加：.obsidian 文件夹忽略** - `isIgnoredFile()` 忽略 .obsidian 路径
 
 ---
 
@@ -132,7 +125,7 @@ src/lib/types.ts          →   obsidian-sync-cli/src/types.ts
 **主要改动：**
 - `dump()` → `log()` (直接用 console.log)
 - 移除 `Notice`, `moment` 等 Obsidian 依赖
-- 保留：`normalizePath`, `hashContent`, `hashArrayBuffer`, `sleep`, `msToSeconds`, `getSafeCtime` 等工具函数（这些函数在 CLI 中仍然需要）
+- 保留：`normalizePath`, `hashContent`, `hashArrayBuffer`, `sleep`, `msToSeconds`, `getSafeCtime` 等工具函数
 
 ---
 
@@ -181,9 +174,12 @@ src/lib/types.ts          →   obsidian-sync-cli/src/types.ts
 
 **实现功能：**
 - 使用 `chokidar` 库监视文件变化
-- 监听 `add`, `change`, `unlink` 事件
-- 触发 NoteOperator/FileOperator 的相应方法
+- 监听 `add`, `change`, `unlink`, `addDir`, `unlinkDir` 事件
+- 触发 NoteOperator/FileOperator/FolderOperator 的相应方法
 - 哈希缓存避免重复处理
+- **忽略规则**：`^\.`（根目录隐藏文件）、`.obsidian`、`node_modules`、`.git`
+- **修复：事件绑定** - chokidar 事件现在正确调用处理函数（之前只记录日志）
+- **修复：忽略模式** - 不再忽略父路径中包含 `.` 的目录（如 `.openclaw`）
 
 ---
 
@@ -197,10 +193,22 @@ src/lib/types.ts          →   obsidian-sync-cli/src/types.ts
 - 注册消息处理器
 - 启动同步
 - 优雅退出处理
+- **添加：Vault 空目录检测** - 当 vault 为空但有旧同步数据时，清除元数据强制全量同步（防止误删远程文件）
 
 ---
 
 ## 同步逻辑差异
+
+### 元数据持久化
+
+| 功能 | 原插件 | CLI |
+|------|--------|-----|
+| 存储位置 | localStorage | `vault_dir/.obsidian/sync-metadata.json` |
+| 文件哈希 | localStorage | `vault_dir/.obsidian/file-hashes.json` |
+| lastNoteSyncTime | ✅ 持久化 | ✅ 持久化 |
+| lastFileSyncTime | ✅ 持久化 | ✅ 持久化 |
+| lastFolderSyncTime | ✅ 持久化 | ✅ 持久化 |
+| 空 Vault 检测 | isInitSync 标志 | 检测 vault 是否为空 + 清除旧元数据 |
 
 ### NoteSync 发送
 
@@ -219,3 +227,75 @@ src/lib/types.ts          →   obsidian-sync-cli/src/types.ts
 | missingFiles | 支持 | ✅ 支持 |
 
 ---
+
+## 消息类型覆盖
+
+| 类别 | 原插件 | CLI | 状态 |
+|------|--------|-----|------|
+| **笔记** | 6种 | 6种 | ✅ 完整 |
+| **文件** | 7种 | 7种 | ✅ 完整 |
+| **文件夹** | 4种 | 4种 | ✅ 完整 |
+| **配置** | 6种 | 0种 | ❌ 未实现 |
+
+**总计**: CLI 支持 17/23 种消息类型 (74%)
+
+---
+
+## 逻辑差异清单
+
+### 已修复 ✅
+
+1. **元数据持久化** - CLI 现已支持，存储在 `.obsidian` 目录
+2. **文件哈希持久化** - CLI 现已支持，存储在 `.obsidian` 目录
+3. **chokidar 事件处理** - CLI 已修复，事件现在正确调用处理函数
+4. **Vault 空目录检测** - CLI 已添加，防止误删远程文件
+
+### 高优先级
+
+5. **路径排除检查 (isPathExcluded)** - CLI 缺失
+6. **同步启用状态检查 (syncEnabled)** - CLI 简化处理
+7. **只读模式 (readonlySyncEnabled)** - CLI 简化为 enableLocalPush
+
+### 中优先级
+
+8. **重命名时哈希匹配检查** - CLI 逻辑简化
+9. **文件夹删除时等待检查 (waitForFolderEmpty)** - CLI 缺失
+10. **冲突通知用户** - CLI 只有日志
+
+### 低优先级
+
+11. **分片进度预估** - CLI 缺失
+12. **上传取消回调** - CLI 使用不同方式
+
+---
+
+## 使用方式
+
+```bash
+# 安装依赖
+npm install
+
+# 构建
+npm run build
+
+# 运行
+node dist/index.js
+```
+
+### config.json 配置
+
+```json
+{
+  "vault_dir": "/path/to/vault",
+  "vault_name": "MyVault",
+  "api_url": "http://localhost:9000",
+  "api_token": "your-token",
+  "enable_local_push": true
+}
+```
+
+---
+
+## 许可证
+
+本 CLI 仅供学习交流使用，遵循原插件的开源协议。

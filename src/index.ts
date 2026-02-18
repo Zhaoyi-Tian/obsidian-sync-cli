@@ -8,7 +8,7 @@ import { NoteOperator } from './note_operator';
 import { FileOperator } from './file_operator';
 import { FolderOperator } from './folder_operator';
 import { FSWatcher } from './fs_watcher';
-import { hashContent, log } from './helps';
+import { hashContent, hashArrayBuffer, log } from './helps';
 import { SnapFile, SnapFolder } from './types';
 
 /**
@@ -50,6 +50,7 @@ class ObsidianSyncCLI {
     // Create sync client
     this.client = new SyncClient(
       this.config.vault_name,
+      this.config.vault_dir,
       this.config.api_url,
       this.config.api_token,
       null as any // Will be set later
@@ -58,13 +59,13 @@ class ObsidianSyncCLI {
     // Create operators
     this.fileOperator = new FileOperator(this.vault, this.client, this.config.enable_local_push);
     this.noteOperator = new NoteOperator(this.vault, this.client, this.config.enable_local_push);
-    this.folderOperator = new FolderOperator(this.vault, this.client);
+    this.folderOperator = new FolderOperator(this.vault, this.client, this.config.enable_local_push);
 
     // Set file operator reference in client
     (this.client as any).fileOperator = this.fileOperator;
 
     // Create watcher
-    this.watcher = new FSWatcher(this.vault, this.noteOperator, this.fileOperator);
+    this.watcher = new FSWatcher(this.vault, this.noteOperator, this.fileOperator, this.folderOperator);
   }
 
   /**
@@ -87,11 +88,19 @@ class ObsidianSyncCLI {
     const lastFileSyncTime = Number(this.client.getMetadata('lastFileSyncTime')) || 0;
     const lastFolderSyncTime = Number(this.client.getMetadata('lastFolderSyncTime')) || 0;
 
-    // Check if vault is empty - force full sync
-    const notes = this.getLocalNotes();
-    const files = this.getLocalFiles();
+    // Check if vault is empty - force full sync and clear old metadata
+    const notes = await this.getLocalNotes();
+    const files = await this.getLocalFiles();
     const folders = this.getLocalFolders();
     const isEmptyVault = notes.length === 0 && files.length === 0;
+
+    // If vault is empty but we have previous sync data, clear it to force full sync
+    // This prevents accidentally deleting remote files when vault is recreated
+    if (isEmptyVault && (lastNoteSyncTime > 0 || lastFileSyncTime > 0)) {
+      log('[Sync] Vault is empty but has previous sync data, clearing metadata for full sync');
+      this.client.clearAllMetadata();
+      this.client.clearAllFileHashes();
+    }
 
     // Determine if this is incremental sync (has previous sync time)
     const isIncrementalSync = !isEmptyVault && lastNoteSyncTime > 0;
@@ -178,6 +187,7 @@ class ObsidianSyncCLI {
     if (missingNotes.length > 0) {
       noteSyncData.missingNotes = missingNotes;
     }
+
     this.client.Send('NoteSync', noteSyncData);
 
     // Sync files - with delFiles and missingFiles
@@ -218,18 +228,31 @@ class ObsidianSyncCLI {
   /**
    * Get all local notes
    */
-  private getLocalNotes(): SnapFile[] {
+  private async getLocalNotes(): Promise<SnapFile[]> {
     const notes: SnapFile[] = [];
     const files = this.vault.getFiles();
 
     for (const file of files) {
       if (file.extension === 'md') {
+        // Read content and compute hash
+        let contentHash = '';
+        try {
+          const content = await this.vault.read(file.path);
+          contentHash = hashContent(content);
+        } catch (e) {
+          // Ignore read errors
+        }
+
+        // Get baseHash from hash cache (previous sync hash)
+        const baseHash = this.client.getFileHash(file.path);
+
         notes.push({
           path: file.path,
           pathHash: hashContent(file.path),
-          contentHash: '', // Will be computed on read
+          contentHash: contentHash,
           mtime: file.stat.mtime,
           size: file.stat.size,
+          baseHash: baseHash || undefined,
         });
       }
     }
@@ -240,19 +263,32 @@ class ObsidianSyncCLI {
   /**
    * Get all local files (non-markdown)
    */
-  private getLocalFiles(): SnapFile[] {
+  private async getLocalFiles(): Promise<SnapFile[]> {
     const files: SnapFile[] = [];
     const allFiles = this.vault.getFiles();
 
     for (const file of allFiles) {
       if (file.extension !== 'md') {
+        // Read content and compute hash
+        let contentHash = '';
+        try {
+          const content = await this.vault.readBinary(file.path);
+          contentHash = hashArrayBuffer(content.buffer as ArrayBuffer);
+        } catch (e) {
+          // Ignore read errors
+        }
+
+        // Get baseHash from hash cache
+        const baseHash = this.client.getFileHash(file.path);
+
         files.push({
           path: file.path,
           pathHash: hashContent(file.path),
-          contentHash: '', // Will be computed on check
+          contentHash: contentHash,
           mtime: file.stat.mtime,
           size: file.stat.size,
           ctime: file.stat.ctime,
+          baseHash: baseHash || undefined,
         });
       }
     }

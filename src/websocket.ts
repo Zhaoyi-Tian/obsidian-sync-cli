@@ -1,4 +1,6 @@
 import WebSocket from 'ws';
+import * as fs from 'fs';
+import * as path from 'path';
 import { addRandomParam, isWsUrl, log, logError } from './helps';
 import { SyncMessage, FileDownloadSession } from './types';
 import { FileOperator } from './file_operator';
@@ -63,6 +65,8 @@ export class SyncClient {
 
   // Local storage metadata
   private metadata = new Map<string, any>();
+  private metadataFile: string;
+  private fileHashesFile: string;
 
   // File operator reference
   private fileOperator: FileOperator;
@@ -70,13 +74,79 @@ export class SyncClient {
   // Callback for when sync should start
   public onSyncStart: (() => void) | null = null;
 
-  constructor(vaultName: string, apiUrl: string, apiToken: string, fileOperator: FileOperator) {
+  constructor(vaultName: string, vaultDir: string, apiUrl: string, apiToken: string, fileOperator: FileOperator) {
     this.vaultName = vaultName;
     this.apiToken = apiToken;
     this.fileOperator = fileOperator;
 
     // Convert http to ws
     this.wsApi = apiUrl.replace(/^http/, 'ws').replace(/\/+$/, '');
+
+    // Initialize metadata file path in vault's .obsidian folder
+    const obsidianDir = path.join(vaultDir, '.obsidian');
+    if (!fs.existsSync(obsidianDir)) {
+      fs.mkdirSync(obsidianDir, { recursive: true });
+    }
+    this.metadataFile = path.join(obsidianDir, 'sync-metadata.json');
+    this.loadMetadata();
+
+    // Initialize file hashes file path
+    this.fileHashesFile = path.join(obsidianDir, 'file-hashes.json');
+    this.loadFileHashes();
+  }
+
+  /**
+   * Load file hashes from file
+   */
+  private loadFileHashes(): void {
+    try {
+      if (fs.existsSync(this.fileHashesFile)) {
+        const data = JSON.parse(fs.readFileSync(this.fileHashesFile, 'utf-8'));
+        this.fileHashes = new Map(Object.entries(data));
+        log('[FileHashes] Loaded', this.fileHashes.size, 'hashes from:', this.fileHashesFile);
+      }
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+
+  /**
+   * Save file hashes to file
+   */
+  private saveFileHashes(): void {
+    try {
+      const obj = Object.fromEntries(this.fileHashes);
+      fs.writeFileSync(this.fileHashesFile, JSON.stringify(obj, null, 2));
+    } catch (e) {
+      log('[FileHashes] Save error:', e);
+    }
+  }
+
+  /**
+   * Load metadata from file
+   */
+  private loadMetadata(): void {
+    try {
+      if (fs.existsSync(this.metadataFile)) {
+        const data = JSON.parse(fs.readFileSync(this.metadataFile, 'utf-8'));
+        this.metadata = new Map(Object.entries(data));
+        log('[Metadata] Loaded from:', this.metadataFile);
+      }
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+
+  /**
+   * Save metadata to file
+   */
+  private saveMetadata(): void {
+    try {
+      const obj = Object.fromEntries(this.metadata);
+      fs.writeFileSync(this.metadataFile, JSON.stringify(obj, null, 2));
+    } catch (e) {
+      log('[Metadata] Save error:', e);
+    }
   }
 
   /**
@@ -109,6 +179,23 @@ export class SyncClient {
    */
   setMetadata(key: string, value: any): void {
     this.metadata.set(key, value);
+    this.saveMetadata();
+  }
+
+  /**
+   * Clear all metadata (for when vault is deleted/recreated)
+   */
+  clearAllMetadata(): void {
+    this.metadata.clear();
+    this.saveMetadata();
+  }
+
+  /**
+   * Clear all file hashes (for when vault is deleted/recreated)
+   */
+  clearAllFileHashes(): void {
+    this.fileHashes.clear();
+    this.saveFileHashes();
   }
 
   /**
@@ -122,6 +209,10 @@ export class SyncClient {
    * Check if file is ignored
    */
   isIgnoredFile(path: string): boolean {
+    // Ignore .obsidian folder (local cache files)
+    if (path.startsWith('.obsidian/') || path === '.obsidian') {
+      return true;
+    }
     return this.ignoredPaths.has(path);
   }
 
@@ -151,6 +242,7 @@ export class SyncClient {
    */
   setFileHash(path: string, hash: string): void {
     this.fileHashes.set(path, hash);
+    this.saveFileHashes();
   }
 
   /**
@@ -158,6 +250,7 @@ export class SyncClient {
    */
   removeFileHash(path: string): void {
     this.fileHashes.delete(path);
+    this.saveFileHashes();
   }
 
   /**

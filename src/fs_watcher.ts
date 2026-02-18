@@ -3,6 +3,7 @@ import * as path from 'path';
 import { Vault } from './vault';
 import { NoteOperator } from './note_operator';
 import { FileOperator } from './file_operator';
+import { FolderOperator } from './folder_operator';
 import { TFile } from './types';
 import { hashContent, normalizePath, log } from './helps';
 
@@ -16,6 +17,7 @@ export class FSWatcher {
   private vault: Vault;
   private noteOperator: NoteOperator;
   private fileOperator: FileOperator;
+  private folderOperator: FolderOperator;
   private watchEnabled: boolean = true;
 
   // Hash cache for change detection
@@ -25,10 +27,11 @@ export class FSWatcher {
   private debounceTimers = new Map<string, NodeJS.Timeout>();
   private debounceDelay = 100;
 
-  constructor(vault: Vault, noteOperator: NoteOperator, fileOperator: FileOperator) {
+  constructor(vault: Vault, noteOperator: NoteOperator, fileOperator: FileOperator, folderOperator: FolderOperator) {
     this.vault = vault;
     this.noteOperator = noteOperator;
     this.fileOperator = fileOperator;
+    this.folderOperator = folderOperator;
   }
 
   /**
@@ -44,13 +47,14 @@ export class FSWatcher {
       followSymlinks: false,
       depth: 99,
       awaitWriteFinish: {
-        stabilityThreshold: 500,
-        pollInterval: 100,
+        stabilityThreshold: 100,
+        pollInterval: 50,
       },
       ignored: [
-        /(^|[\/\\])\../,  // Ignore dotfiles
-        /node_modules/,
-        /\.git/,
+        /^\./,  // Only ignore dotfiles at root level (not dot-folders in path)
+        /[\/\\]\.obsidian[\/\\]/,  // Ignore .obsidian folder (local cache)
+        /[\/\\]node_modules[\/\\]/,
+        /[\/\\]\.git[\/\\]/,
       ],
     });
 
@@ -107,10 +111,14 @@ export class FSWatcher {
    * Handle file event with debounce
    */
   private handleFileEvent(type: 'add' | 'change' | 'unlink', filePath: string): void {
-    if (!this.watchEnabled) return;
+    if (!this.watchEnabled) {
+      log('[Watcher] Watch disabled, skipping event');
+      return;
+    }
 
     // Get relative path
     const relPath = normalizePath(path.relative(this.vault.getDir(), filePath));
+    log('[Watcher] File event:', type, filePath, '->', relPath);
 
     // Skip hidden files
     if (path.basename(relPath).startsWith('.')) return;
@@ -222,8 +230,10 @@ export class FSWatcher {
 
     if (type === 'addDir') {
       log('[Watcher] Directory created:', relPath);
+      this.folderOperator.folderCreate(relPath);
     } else {
       log('[Watcher] Directory deleted:', relPath);
+      this.folderOperator.folderDelete(relPath);
     }
   }
 
