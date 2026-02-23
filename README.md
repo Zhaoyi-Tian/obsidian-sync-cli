@@ -1,3 +1,8 @@
+[!WARNING]
+使用前请务必备份您的数据！
+本项目是基于 AI (Vibe Coding) 生成的临时替代方案，旨在解决无 Obsidian 环境下的同步需求。由于开发者非 TypeScript 专业人员，且代码未经严谨的人工审查，可能存在“AI 幻觉”导致的逻辑 Bug。
+在正式使用前，请确保您的本地库已有完整备份。
+
 原项目前端是 [haierkeys/obsidian-fast-note-sync](https://github.com/haierkeys/obsidian-fast-note-sync)
 根据其代码vibe了一个 CLI 工具，在未安装 Obsidian 的情况下可直接将本地文件夹作为库进行同步,方便ai如[openclaw](https://github.com/openclaw/openclaw)在资源有限的服务器上也能修改 Obsidian 里的内容
 需要搭配其后端食用[haierkeys/fast-note-sync-service](https://github.com/haierkeys/fast-note-sync-service)

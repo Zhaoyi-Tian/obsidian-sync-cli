@@ -89,8 +89,8 @@ class ObsidianSyncCLI {
     const lastFolderSyncTime = Number(this.client.getMetadata('lastFolderSyncTime')) || 0;
 
     // Check if vault is empty - force full sync and clear old metadata
-    const notes = await this.getLocalNotes();
-    const files = await this.getLocalFiles();
+    const notes = await this.getLocalNotes(lastNoteSyncTime);
+    const files = await this.getLocalFiles(lastFileSyncTime);
     const folders = this.getLocalFolders();
     const isEmptyVault = notes.length === 0 && files.length === 0;
 
@@ -228,12 +228,17 @@ class ObsidianSyncCLI {
   /**
    * Get all local notes
    */
-  private async getLocalNotes(): Promise<SnapFile[]> {
+  private async getLocalNotes(lastNoteSyncTime: number): Promise<SnapFile[]> {
     const notes: SnapFile[] = [];
     const files = this.vault.getFiles();
 
     for (const file of files) {
       if (file.extension === 'md') {
+        // Skip files with mtime before lastNoteSyncTime (matching plugin behavior)
+        if (lastNoteSyncTime > 0 && file.stat.mtime < lastNoteSyncTime) {
+          continue;
+        }
+
         // Read content and compute hash
         let contentHash = '';
         try {
@@ -246,14 +251,20 @@ class ObsidianSyncCLI {
         // Get baseHash from hash cache (previous sync hash)
         const baseHash = this.client.getFileHash(file.path);
 
-        notes.push({
+        // Match plugin format: send baseHash if available, otherwise send baseHashMissing
+        const noteItem: any = {
           path: file.path,
           pathHash: hashContent(file.path),
           contentHash: contentHash,
           mtime: file.stat.mtime,
           size: file.stat.size,
-          baseHash: baseHash || undefined,
-        });
+        };
+        if (baseHash) {
+          noteItem.baseHash = baseHash;
+        } else {
+          noteItem.baseHashMissing = true;
+        }
+        notes.push(noteItem);
       }
     }
 
@@ -263,12 +274,17 @@ class ObsidianSyncCLI {
   /**
    * Get all local files (non-markdown)
    */
-  private async getLocalFiles(): Promise<SnapFile[]> {
+  private async getLocalFiles(lastFileSyncTime: number): Promise<SnapFile[]> {
     const files: SnapFile[] = [];
     const allFiles = this.vault.getFiles();
 
     for (const file of allFiles) {
       if (file.extension !== 'md') {
+        // Skip files with mtime before lastFileSyncTime (matching plugin behavior)
+        if (lastFileSyncTime > 0 && file.stat.mtime < lastFileSyncTime) {
+          continue;
+        }
+
         // Read content and compute hash
         let contentHash = '';
         try {
@@ -281,15 +297,21 @@ class ObsidianSyncCLI {
         // Get baseHash from hash cache
         const baseHash = this.client.getFileHash(file.path);
 
-        files.push({
+        // Match plugin format: send baseHash if available, otherwise send baseHashMissing
+        const fileItem: any = {
           path: file.path,
           pathHash: hashContent(file.path),
           contentHash: contentHash,
           mtime: file.stat.mtime,
           size: file.stat.size,
           ctime: file.stat.ctime,
-          baseHash: baseHash || undefined,
-        });
+        };
+        if (baseHash) {
+          fileItem.baseHash = baseHash;
+        } else {
+          fileItem.baseHashMissing = true;
+        }
+        files.push(fileItem);
       }
     }
 
